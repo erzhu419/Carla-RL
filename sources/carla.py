@@ -88,6 +88,7 @@ class CarlaEnv:
         self.actor_list = []
         self.front_camera = None
         self.preview_camera = None
+        self.kmh = 0.0  # Current speed in km/h, updated each step
 
         # Used to determine if Carla simulator is still working as it crashes quite often
         self.last_cam_update = time.time()
@@ -276,6 +277,7 @@ class CarlaEnv:
         # Calculate speed in km/h from car's velocity (3D vector)
         v = self.vehicle.get_velocity()
         kmh = 3.6 * math.sqrt(v.x**2 + v.y**2 + v.z**2)
+        self.kmh = kmh  # Store for external access (e.g. agent.py logging)
 
         done = False
 
@@ -323,23 +325,43 @@ class CarlaEnv:
 operating_system = operating_system()
 
 
+# Returns True if CARLA is on a Windows-mounted path (accessed via WSL /mnt/)
+def _is_windows_carla():
+    return settings.CARLA_PATH.startswith('/mnt/')
+
+
 # Returns binary
 def get_binary():
-    return 'CarlaUE4.exe' if operating_system == 'windows' else 'CarlaUE4.sh'
+    if _is_windows_carla() or operating_system == 'windows':
+        return 'CarlaUE4.exe'
+    return 'CarlaUE4.sh'
 
 
 # Returns exec command
 def get_exec_command():
     binary = get_binary()
-    exec_command = binary if operating_system == 'windows' else ('./' + binary)
-
+    if _is_windows_carla():
+        # Convert /mnt/e/Calar -> E:\Calar for Windows cmd
+        parts = settings.CARLA_PATH.split('/')
+        drive = parts[2].upper() + ':\\'
+        win_path = drive + '\\'.join(parts[3:])
+        exec_command = f'{win_path}\\{binary}'
+    elif operating_system == 'windows':
+        exec_command = binary
+    else:
+        exec_command = './' + binary
     return binary, exec_command
 
 
 # tries to close, and if that does not work to kill all carla processes
 def kill_processes():
-
     binary = get_binary()
+    if _is_windows_carla():
+        # Kill CarlaUE4.exe on Windows side via taskkill
+        subprocess.call(
+            ['/mnt/c/Windows/System32/cmd.exe', '/c', f'taskkill /F /IM {binary} /T'],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return
 
     # Iterate processes and terminate carla ones
     for process in psutil.process_iter():
@@ -365,14 +387,42 @@ def kill_processes():
         psutil.wait_procs(still_alive)
 
 
+# Builds extra launch flags from settings
+def _carla_extra_flags():
+    flags = ''
+    if getattr(settings, 'CARLA_OFFSCREEN', False):
+        flags += ' -RenderOffScreen'
+    quality = getattr(settings, 'CARLA_QUALITY', None)
+    if quality:
+        flags += f' -quality-level={quality}'
+    return flags
+
+
+def _launch_windows_carla(exec_command, port, extra):
+    """Launch CarlaUE4.exe on Windows via PowerShell (avoids UNC path issue with cmd.exe)."""
+    ps_path = '/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe'
+    args = f'-carla-rpc-port={port}{extra}'
+    ps_cmd = f"Start-Process -FilePath '{exec_command}' -ArgumentList '{args}'"
+    subprocess.Popen([ps_path, '-WindowStyle', 'Hidden', '-Command', ps_cmd])
+
+
 # Starts Carla simulator
 def start(playing=False):
     # Kill Carla processes if there are any and start simulator
     if settings.CARLA_HOSTS_TYPE == 'local':
         print('Starting Carla...')
         kill_processes()
+        extra = _carla_extra_flags()
         for process_no in range(1 if playing else settings.CARLA_HOSTS_NO):
-            subprocess.Popen(get_exec_command()[1] + f' -carla-rpc-port={settings.CARLA_HOSTS[process_no][1]}', cwd=settings.CARLA_PATH, shell=True)
+            _, exec_command = get_exec_command()
+            port = settings.CARLA_HOSTS[process_no][1]
+            if _is_windows_carla():
+                # Launch CarlaUE4.exe on Windows side via PowerShell (cmd.exe doesn't support UNC paths from WSL)
+                _launch_windows_carla(exec_command, port, extra)
+            else:
+                subprocess.Popen(
+                    exec_command + f' -carla-rpc-port={port}' + extra,
+                    cwd=settings.CARLA_PATH, shell=True)
             time.sleep(2)
 
     # Else just wait for it to be ready
@@ -402,7 +452,7 @@ def start(playing=False):
                             pass
                 break
             except Exception as e:
-                #print(str(e))
+                print(f'[CARLA] Connection error: {e}')
                 time.sleep(0.1)
 
 
@@ -410,8 +460,14 @@ def start(playing=False):
 def restart(playing=False):
     # Kill Carla processes if there are any and start simulator
     if settings.CARLA_HOSTS_TYPE == 'local':
+        extra = _carla_extra_flags()
         for process_no in range(1 if playing else settings.CARLA_HOSTS_NO):
-            subprocess.Popen(get_exec_command()[1] + f' -carla-rpc-port={settings.CARLA_HOSTS[process_no][1]}', cwd=settings.CARLA_PATH, shell=True)
+            _, exec_command = get_exec_command()
+            port = settings.CARLA_HOSTS[process_no][1]
+            if _is_windows_carla():
+                _launch_windows_carla(exec_command, port, extra)
+            else:
+                subprocess.Popen(exec_command + f' -carla-rpc-port={port}' + extra, cwd=settings.CARLA_PATH, shell=True)
             time.sleep(2)
 
     # Wait for Carla Simulator to be ready

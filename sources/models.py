@@ -1,284 +1,303 @@
-import os
-import sys
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 import settings
-
-# Try to mute and then load Tensorflow and Keras
-# Muting seems to not work lately on Linux in any way
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-stdin = sys.stdin
-sys.stdin = open(os.devnull, 'w')
-stderr = sys.stderr
-sys.stderr = open(os.devnull, 'w')
-import tensorflow as tf
-tf.logging.set_verbosity(tf.logging.ERROR)
-from keras.applications.xception import Xception
-from keras.models import Sequential, Model
-from keras.layers import Dense, GlobalAveragePooling2D, Input, Concatenate, Conv2D, AveragePooling2D, Activation, Flatten
-sys.stdin = stdin
-sys.stderr = stderr
 
 MODEL_NAME_PREFIX = ''
 
-# ---
-# Models
 
-# Xception model
+# ---
+# Helper
+
+def _compute_feature_size(base, input_shape):
+    """Run a dummy forward pass (on CPU) to compute the flattened feature size."""
+    h, w, c = input_shape
+    with torch.no_grad():
+        dummy = torch.zeros(1, c, h, w)
+        out = base(dummy)
+    return out.shape[1]
+
+
+# ---
+# Model bases (feature extractors) — each returns an nn.Module
+# Input tensor convention: (B, C, H, W)  (images stored as HWC are transposed before feeding)
+
 def model_base_Xception(input_shape):
-    model = Xception(weights=None, include_top=False, input_shape=input_shape)
+    raise NotImplementedError(
+        "Xception base not implemented. Use a torchvision model or switch to another base.")
 
-    # Grab last model layer and attach global average pooling layer
-    x = model.output
-    x = GlobalAveragePooling2D()(x)
 
-    return model.input, x
+class _TestCNN(nn.Module):
+    def __init__(self, in_ch):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(in_ch, 32, 3, padding=1), nn.ReLU(),
+            nn.AvgPool2d(5, stride=3, padding=2),
+            nn.Conv2d(32, 64, 3, padding=1), nn.ReLU(),
+            nn.AvgPool2d(5, stride=3, padding=2),
+            nn.Conv2d(64, 64, 3, padding=1), nn.ReLU(),
+            nn.AvgPool2d(5, stride=3, padding=2),
+            nn.Conv2d(64, 128, 3, padding=1), nn.ReLU(),
+            nn.AvgPool2d(3, stride=2, padding=1),
+            nn.Flatten(),
+        )
+    def forward(self, x): return self.net(x)
 
-# First small CNN model
 def model_base_test_CNN(input_shape):
-    model = Sequential()
+    h, w, c = input_shape
+    return _TestCNN(c)
 
-    model.add(Conv2D(32, (3, 3), input_shape=input_shape, padding='same'))
-    model.add(Activation('relu'))
-    model.add(AveragePooling2D(pool_size=(5, 5), strides=(3, 3), padding='same'))
 
-    model.add(Conv2D(64, (3, 3), padding='same'))
-    model.add(Activation('relu'))
-    model.add(AveragePooling2D(pool_size=(5, 5), strides=(3, 3), padding='same'))
+class _64x3CNN(nn.Module):
+    def __init__(self, in_ch):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(in_ch, 64, 3, padding=1), nn.ReLU(),
+            nn.AvgPool2d(5, stride=3, padding=2),
+            nn.Conv2d(64, 64, 3, padding=1), nn.ReLU(),
+            nn.AvgPool2d(5, stride=3, padding=2),
+            nn.Conv2d(64, 64, 3, padding=1), nn.ReLU(),
+            nn.AvgPool2d(5, stride=3, padding=2),
+            nn.Flatten(),
+        )
+    def forward(self, x): return self.net(x)
 
-    model.add(Conv2D(64, (3, 3), padding='same'))
-    model.add(Activation('relu'))
-    model.add(AveragePooling2D(pool_size=(5, 5), strides=(3, 3), padding='same'))
-
-    model.add(Conv2D(128, (3, 3), padding='same'))
-    model.add(Activation('relu'))
-    model.add(AveragePooling2D(pool_size=(3, 3), strides=(2, 2), padding='same'))
-
-    model.add(Flatten())
-
-    return model.input, model.output
-
-# 64x3 model
 def model_base_64x3_CNN(input_shape):
-    model = Sequential()
+    h, w, c = input_shape
+    return _64x3CNN(c)
 
-    model.add(Conv2D(64, (3, 3), input_shape=input_shape, padding='same'))
-    model.add(Activation('relu'))
-    model.add(AveragePooling2D(pool_size=(5, 5), strides=(3, 3), padding='same'))
 
-    model.add(Conv2D(64, (3, 3), padding='same'))
-    model.add(Activation('relu'))
-    model.add(AveragePooling2D(pool_size=(5, 5), strides=(3, 3), padding='same'))
+class _4CNN(nn.Module):
+    def __init__(self, in_ch):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(in_ch, 64, 5, padding=2), nn.ReLU(),
+            nn.AvgPool2d(5, stride=3, padding=2),
+            nn.Conv2d(64, 64, 5, padding=2), nn.ReLU(),
+            nn.AvgPool2d(5, stride=3, padding=2),
+            nn.Conv2d(64, 128, 5, padding=2), nn.ReLU(),
+            nn.AvgPool2d(3, stride=2, padding=1),
+            nn.Conv2d(128, 256, 3, padding=1), nn.ReLU(),
+            nn.AvgPool2d(3, stride=2, padding=1),
+            nn.Flatten(),
+        )
+    def forward(self, x): return self.net(x)
 
-    model.add(Conv2D(64, (3, 3), padding='same'))
-    model.add(Activation('relu'))
-    model.add(AveragePooling2D(pool_size=(5, 5), strides=(3, 3), padding='same'))
-
-    model.add(Flatten())
-
-    return model.input, model.output
-
-# 4 CNN layer model
 def model_base_4_CNN(input_shape):
-    model = Sequential()
+    h, w, c = input_shape
+    return _4CNN(c)
 
-    model.add(Conv2D(64, (5, 5), input_shape=input_shape, padding='same'))
-    model.add(Activation('relu'))
-    model.add(AveragePooling2D(pool_size=(5, 5), strides=(3, 3), padding='same'))
 
-    model.add(Conv2D(64, (5, 5), padding='same'))
-    model.add(Activation('relu'))
-    model.add(AveragePooling2D(pool_size=(5, 5), strides=(3, 3), padding='same'))
+class _5ResidualCNN(nn.Module):
+    """5-layer CNN with residual (concat) skip connections — mirrors model_base_5_residual_CNN."""
+    def __init__(self, in_ch):
+        super().__init__()
+        c0 = in_ch
+        self.conv1 = nn.Conv2d(c0, 64, 7, padding=3)
+        c1 = 64 + c0
+        self.pool1 = nn.AvgPool2d(5, stride=3, padding=2)
 
-    model.add(Conv2D(128, (5, 5), padding='same'))
-    model.add(Activation('relu'))
-    model.add(AveragePooling2D(pool_size=(3, 3), strides=(2, 2), padding='same'))
+        self.conv2 = nn.Conv2d(c1, 64, 5, padding=2)
+        c2 = 64 + c1
+        self.pool2 = nn.AvgPool2d(5, stride=3, padding=2)
 
-    model.add(Conv2D(256, (3, 3), padding='same'))
-    model.add(Activation('relu'))
-    model.add(AveragePooling2D(pool_size=(3, 3), strides=(2, 2), padding='same'))
+        self.conv3 = nn.Conv2d(c2, 128, 5, padding=2)
+        c3 = 128 + c2
+        self.pool3 = nn.AvgPool2d(5, stride=2, padding=2)
 
-    model.add(Flatten())
+        self.conv4 = nn.Conv2d(c3, 256, 5, padding=2)
+        c4 = 256 + c3
+        self.pool4 = nn.AvgPool2d(5, stride=2, padding=2)
 
-    return model.input, model.output
+        self.conv5 = nn.Conv2d(c4, 512, 3, padding=1)
+        self.pool5 = nn.AvgPool2d(3, stride=2, padding=1)
+        self.flatten = nn.Flatten()
 
-# 5 CNN layer with residual connections model
+        # keep reference for convcam hook
+        self.last_conv = self.conv5
+
+    def forward(self, x):
+        h = F.relu(self.conv1(x));  h = self.pool1(torch.cat([h, x], dim=1))
+        h2 = F.relu(self.conv2(h)); h = self.pool2(torch.cat([h2, h], dim=1))
+        h3 = F.relu(self.conv3(h)); h = self.pool3(torch.cat([h3, h], dim=1))
+        h4 = F.relu(self.conv4(h)); h = self.pool4(torch.cat([h4, h], dim=1))
+        h5 = F.relu(self.conv5(h)); h = self.flatten(self.pool5(h5))
+        return h
+
 def model_base_5_residual_CNN(input_shape):
-    input = Input(shape=input_shape)
+    h, w, c = input_shape
+    return _5ResidualCNN(c)
 
-    cnn_1 = Conv2D(64, (7, 7), padding='same')(input)
-    cnn_1a = Activation('relu')(cnn_1)
-    cnn_1c = Concatenate()([cnn_1a, input])
-    cnn_1ap = AveragePooling2D(pool_size=(5, 5), strides=(3, 3), padding='same')(cnn_1c)
 
-    cnn_2 = Conv2D(64, (5, 5), padding='same')(cnn_1ap)
-    cnn_2a = Activation('relu')(cnn_2)
-    cnn_2c = Concatenate()([cnn_2a, cnn_1ap])
-    cnn_2ap = AveragePooling2D(pool_size=(5, 5), strides=(3, 3), padding='same')(cnn_2c)
+class _5ResidualCNNNoAct(nn.Module):
+    """Same as _5ResidualCNN but without relu on the skip-concatenated branches."""
+    def __init__(self, in_ch):
+        super().__init__()
+        c0 = in_ch
+        self.conv1 = nn.Conv2d(c0, 64, 7, padding=3)
+        c1 = 64 + c0
+        self.pool1 = nn.AvgPool2d(5, stride=3, padding=2)
 
-    cnn_3 = Conv2D(128, (5, 5), padding='same')(cnn_2ap)
-    cnn_3a = Activation('relu')(cnn_3)
-    cnn_3c = Concatenate()([cnn_3a, cnn_2ap])
-    cnn_3ap = AveragePooling2D(pool_size=(5, 5), strides=(2, 2), padding='same')(cnn_3c)
+        self.conv2 = nn.Conv2d(c1, 64, 5, padding=2)
+        c2 = 64 + c1
+        self.pool2 = nn.AvgPool2d(5, stride=3, padding=2)
 
-    cnn_4 = Conv2D(256, (5, 5), padding='same')(cnn_3ap)
-    cnn_4a = Activation('relu')(cnn_4)
-    cnn_4c = Concatenate()([cnn_4a, cnn_3ap])
-    cnn_4ap = AveragePooling2D(pool_size=(5, 5), strides=(2, 2), padding='same')(cnn_4c)
+        self.conv3 = nn.Conv2d(c2, 128, 5, padding=2)
+        c3 = 128 + c2
+        self.pool3 = nn.AvgPool2d(5, stride=2, padding=2)
 
-    cnn_5 = Conv2D(512, (3, 3), padding='same')(cnn_4ap)
-    cnn_5a = Activation('relu')(cnn_5)
-    #cnn_5c = Concatenate()([cnn_5a, cnn_4ap])
-    cnn_5ap = AveragePooling2D(pool_size=(3, 3), strides=(2, 2), padding='same')(cnn_5a)
+        self.conv4 = nn.Conv2d(c3, 256, 5, padding=2)
+        c4 = 256 + c3
+        self.pool4 = nn.AvgPool2d(5, stride=2, padding=2)
 
-    flatten = Flatten()(cnn_5ap)
+        self.conv5 = nn.Conv2d(c4, 512, 3, padding=1)
+        self.pool5 = nn.AvgPool2d(3, stride=2, padding=1)
+        self.flatten = nn.Flatten()
+        self.last_conv = self.conv5
 
-    return input, flatten
+    def forward(self, x):
+        h = self.pool1(torch.cat([self.conv1(x), x], dim=1))
+        h2 = self.pool2(torch.cat([self.conv2(h), h], dim=1))
+        h3 = self.pool3(torch.cat([self.conv3(h2), h2], dim=1))
+        h4 = self.pool4(torch.cat([self.conv4(h3), h3], dim=1))
+        h = self.flatten(self.pool5(self.conv5(h4)))
+        return h
 
-# 5 CNN layer with residual connections and no activations model
 def model_base_5_residual_CNN_noact(input_shape):
-    input = Input(shape=input_shape)
+    h, w, c = input_shape
+    return _5ResidualCNNNoAct(c)
 
-    cnn_1 = Conv2D(64, (7, 7), padding='same')(input)
-    #cnn_1a = Activation('relu')(cnn_1)
-    cnn_1c = Concatenate()([cnn_1, input])
-    cnn_1ap = AveragePooling2D(pool_size=(5, 5), strides=(3, 3), padding='same')(cnn_1c)
 
-    cnn_2 = Conv2D(64, (5, 5), padding='same')(cnn_1ap)
-    #cnn_2a = Activation('relu')(cnn_2)
-    cnn_2c = Concatenate()([cnn_2, cnn_1ap])
-    cnn_2ap = AveragePooling2D(pool_size=(5, 5), strides=(3, 3), padding='same')(cnn_2c)
+class _5WideCNN(nn.Module):
+    def __init__(self, in_ch):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_ch, 64, 7, stride=3, padding=3)
 
-    cnn_3 = Conv2D(128, (5, 5), padding='same')(cnn_2ap)
-    #cnn_3a = Activation('relu')(cnn_3)
-    cnn_3c = Concatenate()([cnn_3, cnn_2ap])
-    cnn_3ap = AveragePooling2D(pool_size=(5, 5), strides=(2, 2), padding='same')(cnn_3c)
+        # layer 2: 3 parallel paths
+        self.c2a = nn.Conv2d(64, 64, 5, stride=3, padding=2)
+        self.c2b = nn.Conv2d(64, 64, 3, stride=3, padding=1)
+        self.pool2 = nn.AvgPool2d(3, stride=3, padding=1)  # 64 ch
 
-    cnn_4 = Conv2D(256, (5, 5), padding='same')(cnn_3ap)
-    #cnn_4a = Activation('relu')(cnn_4)
-    cnn_4c = Concatenate()([cnn_4, cnn_3ap])
-    cnn_4ap = AveragePooling2D(pool_size=(5, 5), strides=(2, 2), padding='same')(cnn_4c)
+        c2_out = 64 + 64 + 64  # 192
 
-    cnn_5 = Conv2D(512, (3, 3), padding='same')(cnn_4ap)
-    #cnn_5a = Activation('relu')(cnn_5)
-    #cnn_5c = Concatenate()([cnn_5a, cnn_4ap])
-    cnn_5ap = AveragePooling2D(pool_size=(3, 3), strides=(2, 2), padding='same')(cnn_5)
+        # layer 3
+        self.c3a = nn.Conv2d(c2_out, 128, 5, stride=2, padding=2)
+        self.c3b = nn.Conv2d(c2_out, 128, 3, stride=2, padding=1)
+        self.pool3 = nn.AvgPool2d(2, stride=2, padding=0)  # c2_out ch
 
-    flatten = Flatten()(cnn_5ap)
+        c3_out = 128 + 128 + c2_out  # 448
 
-    return input, flatten
+        # layer 4
+        self.c4a = nn.Conv2d(c3_out, 256, 5, stride=2, padding=2)
+        self.c4b = nn.Conv2d(c3_out, 256, 3, stride=2, padding=1)
+        self.pool4 = nn.AvgPool2d(2, stride=2, padding=0)
 
-# 5 CNN layer with residual connections model
+        c4_out = 256 + 256 + c3_out  # 960
+
+        # layer 5
+        self.c5 = nn.Conv2d(c4_out, 512, 3, stride=2, padding=1)
+        self.gap = nn.AdaptiveAvgPool2d(1)
+        self.flatten = nn.Flatten()
+        self.last_conv = self.c5
+
+    def forward(self, x):
+        h1 = F.relu(self.conv1(x))
+        h2 = torch.cat([F.relu(self.c2a(h1)), F.relu(self.c2b(h1)), self.pool2(h1)], dim=1)
+        h3 = torch.cat([F.relu(self.c3a(h2)), F.relu(self.c3b(h2)), self.pool3(h2)], dim=1)
+        h4 = torch.cat([F.relu(self.c4a(h3)), F.relu(self.c4b(h3)), self.pool4(h3)], dim=1)
+        h5 = F.relu(self.c5(h4))
+        return self.flatten(self.gap(h5))
+
 def model_base_5_wide_CNN(input_shape):
-    input = Input(shape=input_shape)
+    h, w, c = input_shape
+    return _5WideCNN(c)
 
-    cnn_1_c1 = Conv2D(64, (7, 7), strides=(3, 3), padding='same')(input)
-    cnn_1_a = Activation('relu')(cnn_1_c1)
 
-    cnn_2_c1 = Conv2D(64, (5, 5), strides=(3, 3), padding='same')(cnn_1_a)
-    cnn_2_a1 = Activation('relu')(cnn_2_c1)
-    cnn_2_c2 = Conv2D(64, (3, 3), strides=(3, 3), padding='same')(cnn_1_a)
-    cnn_2_a2 = Activation('relu')(cnn_2_c2)
-    cnn_2_ap = AveragePooling2D(pool_size=(3, 3), strides=(3, 3), padding='same')(cnn_1_a)
-    cnn_2_c = Concatenate()([cnn_2_a1, cnn_2_a2, cnn_2_ap])
+class _5WideCNNNoAct(nn.Module):
+    """5_wide_CNN without some relu activations on inner branches."""
+    def __init__(self, in_ch):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_ch, 64, 7, stride=3, padding=3)
 
-    cnn_3_c1 = Conv2D(128, (5, 5), strides=(2, 2), padding='same')(cnn_2_c)
-    cnn_3_a1 = Activation('relu')(cnn_3_c1)
-    cnn_3_c2 = Conv2D(128, (3, 3), strides=(2, 2), padding='same')(cnn_2_c)
-    cnn_3_a2 = Activation('relu')(cnn_3_c2)
-    cnn_3_ap = AveragePooling2D(pool_size=(2, 2), strides=(2, 2), padding='same')(cnn_2_c)
-    cnn_3_c = Concatenate()([cnn_3_a1, cnn_3_a2, cnn_3_ap])
+        self.c2a = nn.Conv2d(64, 64, 5, stride=3, padding=2)
+        self.c2b = nn.Conv2d(64, 64, 3, stride=3, padding=1)
+        self.pool2 = nn.AvgPool2d(3, stride=3, padding=1)
+        c2_out = 192
 
-    cnn_4_c1 = Conv2D(256, (5, 5), strides=(2, 2), padding='same')(cnn_3_c)
-    cnn_4_a1 = Activation('relu')(cnn_4_c1)
-    cnn_4_c2 = Conv2D(256, (3, 3), strides=(2, 2), padding='same')(cnn_3_c)
-    cnn_4_a2 = Activation('relu')(cnn_4_c2)
-    cnn_4_ap = AveragePooling2D(pool_size=(2, 2), strides=(2, 2), padding='same')(cnn_3_c)
-    cnn_4_c = Concatenate()([cnn_4_a1, cnn_4_a2, cnn_4_ap])
+        self.c3a = nn.Conv2d(c2_out, 128, 5, stride=2, padding=2)
+        self.c3b = nn.Conv2d(c2_out, 128, 3, stride=2, padding=1)
+        self.pool3 = nn.AvgPool2d(2, stride=2, padding=0)
+        c3_out = 128 + 128 + c2_out
 
-    cnn_5_c1 = Conv2D(512, (3, 3), strides=(2, 2), padding='same')(cnn_4_c)
-    cnn_5_a1 = Activation('relu')(cnn_5_c1)
-    cnn_5_gap = GlobalAveragePooling2D()(cnn_5_a1)
+        self.c4a = nn.Conv2d(c3_out, 256, 5, stride=2, padding=2)
+        self.c4b = nn.Conv2d(c3_out, 256, 3, stride=2, padding=1)
+        self.pool4 = nn.AvgPool2d(2, stride=2, padding=0)
+        c4_out = 256 + 256 + c3_out
 
-    return input, cnn_5_gap
+        self.c5 = nn.Conv2d(c4_out, 512, 3, stride=2, padding=1)
+        self.gap = nn.AdaptiveAvgPool2d(1)
+        self.flatten = nn.Flatten()
+        self.last_conv = self.c5
 
-# 5 CNN layer with residual connections and no activations model
+    def forward(self, x):
+        h1 = F.relu(self.conv1(x))
+        h2 = torch.cat([self.c2a(h1), self.c2b(h1), self.pool2(h1)], dim=1)
+        h3 = torch.cat([self.c3a(h2), self.c3b(h2), self.pool3(h2)], dim=1)
+        h4 = torch.cat([self.c4a(h3), self.c4b(h3), self.pool4(h3)], dim=1)
+        return self.flatten(self.gap(self.c5(h4)))
+
 def model_base_5_wide_CNN_noact(input_shape):
-    input = Input(shape=input_shape)
+    h, w, c = input_shape
+    return _5WideCNNNoAct(c)
 
-    cnn_1_c1 = Conv2D(64, (7, 7), strides=(3, 3), padding='same')(input)
-    cnn_1_a = Activation('relu')(cnn_1_c1)
-
-    cnn_2_c1 = Conv2D(64, (5, 5), strides=(3, 3), padding='same')(cnn_1_a)
-    #cnn_2_a1 = Activation('relu')(cnn_2_c1)
-    cnn_2_c2 = Conv2D(64, (3, 3), strides=(3, 3), padding='same')(cnn_1_a)
-    #cnn_2_a2 = Activation('relu')(cnn_2_c2)
-    cnn_2_ap = AveragePooling2D(pool_size=(3, 3), strides=(3, 3), padding='same')(cnn_1_a)
-    cnn_2_c = Concatenate()([cnn_2_c1, cnn_2_c2, cnn_2_ap])
-
-    cnn_3_c1 = Conv2D(128, (5, 5), strides=(2, 2), padding='same')(cnn_2_c)
-    #cnn_3_a1 = Activation('relu')(cnn_3_c1)
-    cnn_3_c2 = Conv2D(128, (3, 3), strides=(2, 2), padding='same')(cnn_2_c)
-    #cnn_3_a2 = Activation('relu')(cnn_3_c2)
-    cnn_3_ap = AveragePooling2D(pool_size=(2, 2), strides=(2, 2), padding='same')(cnn_2_c)
-    cnn_3_c = Concatenate()([cnn_3_c1, cnn_3_c2, cnn_3_ap])
-
-    cnn_4_c1 = Conv2D(256, (5, 5), strides=(2, 2), padding='same')(cnn_3_c)
-    #cnn_4_a1 = Activation('relu')(cnn_4_c1)
-    cnn_4_c2 = Conv2D(256, (3, 3), strides=(2, 2), padding='same')(cnn_3_c)
-    #cnn_4_a2 = Activation('relu')(cnn_4_c2)
-    cnn_4_ap = AveragePooling2D(pool_size=(2, 2), strides=(2, 2), padding='same')(cnn_3_c)
-    cnn_4_c = Concatenate()([cnn_4_c1, cnn_4_c2, cnn_4_ap])
-
-    cnn_5_c1 = Conv2D(512, (3, 3), strides=(2, 2), padding='same')(cnn_4_c)
-    #cnn_5_a1 = Activation('relu')(cnn_5_c1)
-    cnn_5_gap = GlobalAveragePooling2D()(cnn_5_c1)
-
-    return input, cnn_5_gap
 
 # ---
-# Model heads
+# Model heads — wrap a base with output layers, return complete nn.Module
 
-def model_head_hidden_dense(model_input, model_output, outputs, model_settings):
+class _HiddenDenseDQN(nn.Module):
+    """Base → optional kmh concat → Dense(hidden, relu) → Dense(outputs, linear)"""
+    def __init__(self, base, feature_size, outputs, model_settings, use_kmh):
+        super().__init__()
+        self.base = base
+        self.use_kmh = use_kmh
+        in_size = feature_size + (1 if use_kmh else 0)
+        self.fc1 = nn.Linear(in_size, model_settings['hidden_1_units'])
+        self.fc2 = nn.Linear(model_settings['hidden_1_units'], outputs)
 
-    # Main input (image)
-    inputs = [model_input]
+    def forward(self, x, kmh=None):
+        feat = self.base(x)
+        if self.use_kmh and kmh is not None:
+            feat = torch.cat([feat, kmh], dim=1)
+        return self.fc2(F.relu(self.fc1(feat)))
 
-    x = model_output
 
-    # Add additional inputs with more data and concatenate
-    if 'kmh' in settings.AGENT_ADDITIONAL_DATA:
-        kmh_input = Input(shape=(1,), name='kmh_input')
-        x = Concatenate()([x, kmh_input])
-        inputs.append(kmh_input)
+class _DirectDQN(nn.Module):
+    """Base → optional kmh project (Dense4) concat → Dense(outputs, linear)"""
+    def __init__(self, base, feature_size, outputs, model_settings, use_kmh):
+        super().__init__()
+        self.base = base
+        self.use_kmh = use_kmh
+        if use_kmh:
+            self.kmh_fc = nn.Linear(1, 4)
+            in_size = feature_size + 4
+        else:
+            in_size = feature_size
+        self.out = nn.Linear(in_size, outputs)
 
-    # Add additional fully-connected layer
-    x = Dense(model_settings['hidden_1_units'], activation='relu')(x)
+    def forward(self, x, kmh=None):
+        feat = self.base(x)
+        if self.use_kmh and kmh is not None:
+            feat = torch.cat([feat, F.relu(self.kmh_fc(kmh))], dim=1)
+        return self.out(feat)
 
-    # And finally output (regression) layer
-    predictions = Dense(outputs, activation='linear')(x)
 
-    # Create a model
-    model = Model(inputs=inputs, outputs=predictions)
+def model_head_hidden_dense(base, input_shape, outputs, model_settings):
+    use_kmh = 'kmh' in settings.AGENT_ADDITIONAL_DATA
+    feature_size = _compute_feature_size(base, input_shape)
+    return _HiddenDenseDQN(base, feature_size, outputs, model_settings, use_kmh)
 
-    return model
 
-def model_head_direct(model_input, model_output, outputs, model_settings):
-
-    # Main input (image)
-    inputs = [model_input]
-
-    x = model_output
-
-    # Add additional inputs with more data and concatenate
-    if 'kmh' in settings.AGENT_ADDITIONAL_DATA:
-        kmh_input = Input(shape=(1,), name='kmh_input')
-        y = Dense(4, activation='relu')(kmh_input)
-        x = Concatenate()([x, y])
-        inputs.append(kmh_input)
-
-    # And finally output (regression) layer
-    predictions = Dense(outputs, activation='linear')(x)
-
-    # Create a model
-    model = Model(inputs=inputs, outputs=predictions)
-
-    return model
+def model_head_direct(base, input_shape, outputs, model_settings):
+    use_kmh = 'kmh' in settings.AGENT_ADDITIONAL_DATA
+    feature_size = _compute_feature_size(base, input_shape)
+    return _DirectDQN(base, feature_size, outputs, model_settings, use_kmh)

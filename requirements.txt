@@ -1,6 +1,7 @@
 numpy
-tensorflow-gpu
-keras
+torch
+torchvision
+tensorboard
 opencv-python
 psutil
 colorama
